@@ -143,28 +143,28 @@ EOT
   (adapter-init adapter)
   (values adapter base (adapter-current-revision adapter) revision))
 
-(define (print-message message)
+(define (display-message message)
   (if (and (dry-run?) (not (string=? message "")))
       (displayln (~a "-- " message))
       (displayln message)))
 
-(define (print-dry-run migration script-proc)
+(define (display-dry-run migration script-proc)
   (unless (string=? (migration-revision migration) "base")
     (define scripts (script-proc migration))
-    (print-message @~a{Revision: @(migration-revision migration)})
-    (print-message @~a{Parent: @(migration-parent migration)})
-    (print-message @~a{Path: @(migration-path migration)})
+    (display-message @~a{Revision: @(migration-revision migration)})
+    (display-message @~a{Parent: @(migration-parent migration)})
+    (display-message @~a{Path: @(migration-path migration)})
     (cond
       [(null? scripts) (displayln "-- no content --")]
       [else (for-each displayln scripts)])))
 
-(define (print-migration migration)
+(define (display-migration migration)
   (unless (string=? (migration-revision migration) "base")
-    (print-message @~a{Revision: @(migration-revision migration)})
-    (print-message @~a{Parent: @(migration-parent migration)})
-    (print-message @~a{Path: @(migration-path migration)})
-    (print-message @~a{Description: @(migration-description migration)})
-    (print-message "")))
+    (display-message @~a{Revision: @(migration-revision migration)})
+    (display-message @~a{Parent: @(migration-parent migration)})
+    (display-message @~a{Path: @(migration-path migration)})
+    (display-message @~a{Description: @(migration-description migration)})
+    (display-message "")))
 
 (define (handle-help)
   (exit-with-errors!
@@ -184,8 +184,8 @@ EOT
   (define target-revision
     (or input-revision (migration-revision (migration-most-recent base))))
 
-  (print-message @~a{Current revision: @(or current-revision "base")})
-  (print-message @~a{Target revision: @target-revision})
+  (display-message @~a{Current revision: @(or current-revision "base")})
+  (display-message @~a{Target revision: @target-revision})
   (when (equal? current-revision target-revision)
     (exit 0))
 
@@ -194,10 +194,10 @@ EOT
 
   (with-handlers ([exn:fail:adapter:migration? exit-with-adapter-error!])
     (for ([migration plan])
-      (print-message "")
-      (print-message @~a{Applying revision: @(migration-revision migration)})
+      (display-message "")
+      (display-message @~a{Applying revision: @(migration-revision migration)})
       (if (dry-run?)
-          (print-dry-run migration migration-up)
+          (display-dry-run migration migration-up)
           (adapter-apply! adapter (migration-revision migration) (migration-up migration))))))
 
 (define (handle-rollback)
@@ -217,9 +217,9 @@ EOT
       ["base" #f]
       [rev rev]))
 
-  (print-message @~a{WARNING: Never roll back a production database!})
-  (print-message @~a{Current revision: @(or current-revision "base")})
-  (print-message @~a{Target revision: @(or target-revision "base")})
+  (display-message @~a{WARNING: Never roll back a production database!})
+  (display-message @~a{Current revision: @(or current-revision "base")})
+  (display-message @~a{Target revision: @(or target-revision "base")})
   (when (equal? current-revision target-revision)
     (exit-with-errors! "error: nothing to do"))
 
@@ -228,10 +228,10 @@ EOT
 
   (with-handlers ([exn:fail:adapter:migration? exit-with-adapter-error!])
     (for ([migration plan])
-      (print-message "")
-      (print-message @~a{Rolling back revision: @(migration-revision migration)})
+      (display-message "")
+      (display-message @~a{Rolling back revision: @(migration-revision migration)})
       (if (dry-run?)
-          (print-dry-run migration migration-down)
+          (display-dry-run migration migration-down)
           (adapter-apply! adapter (migration-parent migration) (migration-down migration))))))
 
 (define (handle-create)
@@ -257,38 +257,59 @@ EOT
                      (exit-with-errors! @~a{error: output file '@filename' already exists}))])
     (void (call-with-output-file filename (curry write-string content)))))
 
-(define (handle-show)
+(define (handle-extract)
   (define revision
     (command-line
      #:program (current-program-name)
      #:once-each
-     [("-p" "--path") path
-                      "The path to the migrations folder."
-                      (migrations-path path)]
-
+     [("-p" "--path")
+      PATH
+      "The path to the migrations folder."
+      (migrations-path PATH)]
      #:args ([revision #f]) revision))
-
   (parameterize ([dry-run? #f])
     (define base (read-migrations))
     (unless base
-      (exit-with-errors! "error: no migrations"))
-
+      (exit-with-errors! "error: no migration"))
     (cond
       [revision
        (define migration (migration-find-revision base revision))
        (unless migration
          (exit-with-errors! @~a{error: revision '@revision' not found}))
-
-       (print-migration migration)]
-
+       (for-each displayln (migration-up migration))]
       [else
-       (for-each print-migration (reverse (migration->list base)))])))
+       (for ([migration (in-list (migration->list base))])
+         (for-each displayln (migration-up migration)))])))
+
+(define (handle-show)
+  (define revision
+    (command-line
+     #:program (current-program-name)
+     #:once-each
+     [("-p" "--path")
+      PATH
+      "The path to the migrations folder."
+      (migrations-path PATH)]
+     #:args ([revision #f]) revision))
+  (parameterize ([dry-run? #f])
+    (define base (read-migrations))
+    (unless base
+      (exit-with-errors! "error: no migrations"))
+    (cond
+      [revision
+       (define migration (migration-find-revision base revision))
+       (unless migration
+         (exit-with-errors! @~a{error: revision '@revision' not found}))
+       (display-migration migration)]
+      [else
+       (for-each display-migration (reverse (migration->list base)))])))
 
 (define ((handle-unknown command))
   (exit-with-errors! @~a{error: unrecognized command '@command'}))
 
 (define all-commands
   (hasheq 'create   handle-create
+          'extract  handle-extract
           'help     handle-help
           'migrate  handle-migrate
           'rollback handle-rollback
