@@ -4,55 +4,57 @@
          net/url
          racket/contract/base
          racket/format
-         racket/lazy-require
          racket/match
          "base.rkt")
 
 (provide
  (contract-out
-  [struct postgres-adapter ([conn connection?] [schema string?])]
+  [struct postgres-adapter
+    ([conn connection?]
+     [schema string?])]
   [url->postgres-adapter (-> url? adapter?)]))
 
-(define (CREATE-SCHEMA-TABLE schema)
-  (format #<<EOQ
-CREATE TABLE IF NOT EXISTS ~s.north_schema_version(
+(define (~table ad)
+  (define schema (postgres-adapter-schema ad))
+  (format "~s.north_schema_version" schema))
+
+(define (~create-table ad)
+  (format #<<STMT
+CREATE TABLE IF NOT EXISTS ~a(
   current_revision TEXT NOT NULL
-) WITH (
-  fillfactor = 10
-);
-EOQ
-  schema)
-)
+) WITH (fillfactor = 10)
+STMT
+          (~table ad)))
 
 (struct postgres-adapter (conn schema)
   #:methods gen:adapter
   [(define (adapter-init ad)
      (define conn (postgres-adapter-conn ad))
-     (define schema (postgres-adapter-schema ad))
      (call-with-transaction conn
        (lambda ()
          (log-north-adapter-debug "creating schema table")
-         (query-exec conn (CREATE-SCHEMA-TABLE schema)))))
+         (query-exec conn (~create-table ad)))))
 
    (define (adapter-current-revision ad)
-     (define conn (postgres-adapter-conn ad))
-     (define schema (postgres-adapter-schema ad))
-     (query-maybe-value conn (format "SELECT current_revision FROM ~s.north_schema_version" schema)))
+     (query-maybe-value
+      (postgres-adapter-conn ad)
+      (format "SELECT current_revision FROM ~a" (~table ad))))
 
    (define (adapter-apply! ad revision scripts)
      (define conn (postgres-adapter-conn ad))
-     (define schema (postgres-adapter-schema ad))
+     (define table (~table ad))
      (with-handlers ([exn:fail:sql?
                       (lambda (e)
-                        (raise (exn:fail:adapter:migration @~a{failed to apply revision '@revision'}
-                                                           (current-continuation-marks) e revision)))])
+                        (raise (exn:fail:adapter:migration
+                                @~a{failed to apply revision '@revision'}
+                                (current-continuation-marks) e revision)))])
        (call-with-transaction conn
-        (lambda ()
-          (log-north-adapter-debug "applying revision ~a" revision)
-          (for ([script (in-list scripts)])
-            (query-exec conn script))
-          (query-exec conn (format "DELETE FROM ~s.north_schema_version" schema))
-          (query-exec conn (format "INSERT INTO ~s.north_schema_version VALUES ($1)" schema) revision)))))])
+         (lambda ()
+           (log-north-adapter-debug "applying revision ~a" revision)
+           (for ([script (in-list scripts)])
+             (query-exec conn script))
+           (query-exec conn (format "DELETE FROM ~a" table))
+           (query-exec conn (format "INSERT INTO ~a VALUES ($1)" table) revision)))))])
 
 (define (url->postgres-adapter url)
   (define (oops message)
@@ -84,14 +86,14 @@ EOQ
       [`(sslmode . ,value) (oops (format "invalid `sslmode' value: ~e" value))]))
   (define schema
     (match (assq 'schema query)
-      [#f "public"]
-      [`(schema . ,value) value]))
-
-  (postgres-adapter
-   (postgresql-connect #:database database
-                       #:server host
-                       #:port (url-port url)
-                       #:ssl sslmode
-                       #:user username
-                       #:password password)
-   schema))
+      [`(schema . ,value) value]
+      [#f "public"]))
+  (define conn
+    (postgresql-connect
+     #:database database
+     #:server host
+     #:port (url-port url)
+     #:ssl sslmode
+     #:user username
+     #:password password))
+  (postgres-adapter conn schema))
